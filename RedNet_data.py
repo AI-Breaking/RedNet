@@ -1,3 +1,4 @@
+# 필수 라이브러리 및 모듈 임포트
 import numpy as np
 import scipy.io
 import imageio
@@ -10,8 +11,9 @@ import skimage.transform
 import random
 import torchvision
 import torch
-from RedNet_train import image_h, image_w
+from RedNet_train import image_h, image_w # RedNet_train 스크립트에서 이미지의 높이와 너비를 임포트
 
+# 데이터 파일 경로 정의
 img_dir_train_file = './data/img_dir_train.txt'
 depth_dir_train_file = './data/depth_dir_train.txt'
 label_dir_train_file = './data/label_train.txt'
@@ -19,14 +21,15 @@ img_dir_test_file = './data/img_dir_test.txt'
 depth_dir_test_file = './data/depth_dir_test.txt'
 label_dir_test_file = './data/label_test.txt'
 
-
+# SUNRGBD 데이터셋을 위한 PyTorch Dataset 클래스 정의
 class SUNRGBD(Dataset):
     def __init__(self, transform=None, phase_train=True, data_dir=None):
 
-        self.phase_train = phase_train
-        self.transform = transform
+        self.phase_train = phase_train # 학습 또는 테스트 단계 여부
+        self.transform = transform # 적용할 전처리 트랜스폼
 
         try:
+            # 이미지, 깊이, 레이블 파일 경로를 텍스트 파일에서 로드
             with open(img_dir_train_file, 'r') as f:
                 self.img_dir_train = f.read().splitlines()
             with open(depth_dir_train_file, 'r') as f:
@@ -40,8 +43,10 @@ class SUNRGBD(Dataset):
             with open(label_dir_test_file, 'r') as f:
                 self.label_dir_test = f.read().splitlines()
         except:
+            # 텍스트 파일이 없는 경우 SUNRGB-D 데이터셋에서 직접 로드
             if data_dir is None:
                 data_dir = '/path/to/SUNRGB-D'
+            # SUNRGBD 메타데이터 및 분할 정보 로드
             SUNRGBDMeta_dir = os.path.join(data_dir, 'SUNRGBDtoolbox/Metadata/SUNRGBDMeta.mat')
             allsplit_dir = os.path.join(data_dir, 'SUNRGBDtoolbox/traintestSUNRGBD/allsplit.mat')
             SUNRGBD2Dseg_dir = os.path.join(data_dir, 'SUNRGBDtoolbox/Metadata/SUNRGBD2Dseg.mat')
@@ -60,7 +65,10 @@ class SUNRGBD(Dataset):
 
             seglabel = self.SUNRGBD2Dseg['SUNRGBD2Dseg']['seglabel']
 
+            # 이미지, 깊이, 레이블 경로를 메타데이터에서 추출하여 배열에 저장
             for i, meta in enumerate(SUNRGBDMeta):
+                # 경로 처리 및 레이블 파일 생성
+                # train/test 분할에 따라 데이터 배열에 추가
                 meta_dir = '/'.join(meta.rgbpath.split('/')[:-2])
                 real_dir = meta_dir.replace('/n/fs/sun3d/data', data_dir)
                 depth_bfx_path = os.path.join(real_dir, 'depth_bfx/' + meta.depthname)
@@ -81,7 +89,8 @@ class SUNRGBD(Dataset):
                     self.img_dir_test = np.append(self.img_dir_test, rgb_path)
                     self.depth_dir_test = np.append(self.depth_dir_test, depth_bfx_path)
                     self.label_dir_test = np.append(self.label_dir_test, label_path)
-
+            
+            # 분할 정보를 텍스트 파일에 저장
             local_file_dir = '/'.join(img_dir_train_file.split('/')[:-1])
             if not os.path.exists(local_file_dir):
                 os.mkdir(local_file_dir)
@@ -99,12 +108,14 @@ class SUNRGBD(Dataset):
                 f.write('\n'.join(self.label_dir_test))
 
     def __len__(self):
+        # 데이터셋의 길이를 반환합니다.
         if self.phase_train:
             return len(self.img_dir_train)
         else:
             return len(self.img_dir_test)
 
     def __getitem__(self, idx):
+        # 데이터셋의 특정 인덱스에 해당하는 샘플을 로드하고 반환합니다.
         if self.phase_train:
             img_dir = self.img_dir_train
             depth_dir = self.depth_dir_train
@@ -125,7 +136,7 @@ class SUNRGBD(Dataset):
 
         return sample
 
-
+# - RandomHSV: 샘플의 색상 공간을 무작위로 조정합니다.
 class RandomHSV(object):
     """
         Args:
@@ -164,7 +175,7 @@ class RandomHSV(object):
 
         return {'image': img_new, 'depth': sample['depth'], 'label': sample['label']}
 
-
+# - scaleNorm: 이미지와 깊이, 레이블을 지정된 높이와 너비로 조정합니다.
 class scaleNorm(object):
     def __call__(self, sample):
         image, depth, label = sample['image'], sample['depth'], sample['label']
@@ -180,7 +191,7 @@ class scaleNorm(object):
 
         return {'image': image, 'depth': depth, 'label': label}
 
-
+# RandomScale: 무작위로 이미지의 크기를 조정합니다.
 class RandomScale(object):
     def __init__(self, scale):
         self.scale_low = min(scale)
@@ -204,7 +215,7 @@ class RandomScale(object):
 
         return {'image': image, 'depth': depth, 'label': label}
 
-
+# RandomCrop: 이미지에서 무작위로 특정 크기의 부분을 잘라냅니다.
 class RandomCrop(object):
     def __init__(self, th, tw):
         self.th = th
@@ -222,6 +233,7 @@ class RandomCrop(object):
                 'label': label[i:i + image_h, j:j + image_w]}
 
 
+# RandomFlip: 이미지를 무작위로 좌우 반전시킵니다.
 class RandomFlip(object):
     def __call__(self, sample):
         image, depth, label = sample['image'], sample['depth'], sample['label']
@@ -234,6 +246,7 @@ class RandomFlip(object):
 
 
 # Transforms on torch.*Tensor
+# Normalize: 이미지와 깊이 데이터를 정규화합니다.
 class Normalize(object):
     def __call__(self, sample):
         image, depth = sample['image'], sample['depth']
@@ -247,7 +260,7 @@ class Normalize(object):
 
         return sample
 
-
+# ToTensor: 샘플 데이터를 PyTorch 텐서로 변환합니다.
 class ToTensor(object):
     """Convert ndarrays in sample to Tensors."""
 
@@ -269,6 +282,8 @@ class ToTensor(object):
         # torch image: C X H X W
         image = image.transpose((2, 0, 1))
         depth = np.expand_dims(depth, 0).astype(np.float)
+
+        # numpy 배열을 PyTorch 텐서로 변환
         return {'image': torch.from_numpy(image).float(),
                 'depth': torch.from_numpy(depth).float(),
                 'label': torch.from_numpy(label).float(),
