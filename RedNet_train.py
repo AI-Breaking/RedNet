@@ -1,3 +1,14 @@
+# 이 코드는 RedNet 모델을 학습시키기 위해 구성되어 있으며, 다음과 같은 주요 기능들을 포함합니다:
+
+# - **데이터 준비**: `DataLoader`와 전처리 트랜스포메이션을 사용하여 학습 데이터를 준비합니다.
+# - **모델 설정**: RedNet 모델을 초기화하고, 필요에 따라 DataParallel을 사용하여 멀티 GPU 학습을 설정합니다.
+# - **손실 함수와 옵티마이저 정의**: 가중치가 적용된 크로스 엔트로피 손실 함수와 SGD 옵티마이저를 사용합니다.
+# - **학습 과정**: 에포크 단위로 모델을 학습시키며, 각 배치에서 손실을 계산하고 역전파를 통해 모델을 업데이트합니다.
+# - **진행 상황 로깅과 시각화**: 학습 과정에서 주기적으로 로그를 출력하고, 텐서보드를 통해 학습 과정을 시각화합니다.
+# - **체크포인트 저장 및 로딩**: 학습 과정 중에 모델의 상태를 주기적으로 저장하고, 필요시 마지막 체크포인트에서 학습을 재개할 수 있습니다.
+
+
+# 필수 라이브러리와 모듈을 임포트
 import argparse
 import os
 import time
@@ -19,6 +30,7 @@ from utils.utils import load_ckpt
 from utils.utils import print_log
 from torch.optim.lr_scheduler import LambdaLR
 
+# 명령줄 인자를 정의합니다. 학습을 위한 여러 설정을 사용자가 지정할 수 있습니다.
 parser = argparse.ArgumentParser(description='RedNet Indoor Sementic Segmentation')
 parser.add_argument('--data-dir', default=None, metavar='DIR',
                     help='path to SUNRGB-D')
@@ -56,11 +68,14 @@ parser.add_argument('--checkpoint', action='store_true', default=False,
                     help='Using Pytorch checkpoint or not')
 
 args = parser.parse_args()
+
+# CUDA를 사용할 수 있는 경우 GPU를 사용하도록 설정합니다.
 device = torch.device("cuda:0" if args.cuda and torch.cuda.is_available() else "cpu")
 image_w = 640
 image_h = 480
 os.environ["CUDA_VISIBLE_DEVICES"]= "1,2"
 def train():
+    # 데이터 전처리와 로딩을 위한 설정을 합니다.
     train_data = RedNet_data.SUNRGBD(transform=transforms.Compose([RedNet_data.scaleNorm(),
                                                                    RedNet_data.RandomScale((1.0, 1.4)),
                                                                    RedNet_data.RandomHSV((0.9, 1.1),
@@ -77,42 +92,57 @@ def train():
 
     num_train = len(train_data)
 
+    # 모델을 초기화합니다. 필요에 따라 사전 학습된 모델을 로드하거나 새 모델을 사용합니다.
     if args.last_ckpt:
         model = RedNet_model.RedNet(pretrained=False)
     else:
-        model = RedNet_model.RedNet(pretrained=True)
+        model = RedNet_moel.RedNet(pretrained=True)
+    # 사용 가능한 GPU가 여러 개인 경우, DataParallel을 사용해 모델을 병렬로 학습합니다.
     if torch.cuda.device_count() > 1:
         print("Let's use", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
+    
+    # 가중치가 적용된 크로스 엔트로피 손실 함수를 설정합니다.
     CEL_weighted = utils.CrossEntropyLoss2d()
+
+    # 모델과 손실 함수를 지정한 디바이스로 이동합니다.
     model.train()
     model.to(device)
     CEL_weighted.to(device)
+
+    # 옵티마이저를 설정합니다. 여기서는 SGD를 사용합니다.
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr,
                                 momentum=args.momentum, weight_decay=args.weight_decay)
 
+    # 전역 스텝 변수를 초기화합니다.
     global_step = 0
 
+    # 최신 체크포인트가 있을 경우, 해당 체크포인트에서 학습을 재개합니다.
     if args.last_ckpt:
         global_step, args.start_epoch = load_ckpt(model, optimizer, args.last_ckpt, device)
 
+    # 학습률 스케쥴러를 설정합니다. 지정된 에포크마다 학습률이 감소합니다.
     lr_decay_lambda = lambda epoch: args.lr_decay_rate ** (epoch // args.lr_epoch_per_decay)
     scheduler = LambdaLR(optimizer, lr_lambda=lr_decay_lambda)
 
+    # 텐서보드를 위한 요약(summary) 작성자를 설정합니다.
     writer = SummaryWriter(args.summary_dir)
 
+    # 학습 루프를 시작합니다.
     for epoch in range(int(args.start_epoch), args.epochs):
 
         scheduler.step(epoch)
         local_count = 0
         last_count = 0
         end_time = time.time()
+
+        # 지정된 주기마다 모델의 체크포인트를 저장합니다.
         if epoch % args.save_epoch_freq == 0 and epoch != args.start_epoch:
             save_ckpt(args.ckpt_dir, model, optimizer, global_step, epoch,
                       local_count, num_train)
 
+        # 배치 데이터를 순회하며 학습을 진행합니다.
         for batch_idx, sample in enumerate(train_loader):
-
             image = sample['image'].to(device)
             depth = sample['depth'].to(device)
             target_scales = [sample[s].to(device) for s in ['label', 'label2', 'label3', 'label4', 'label5']]
@@ -123,6 +153,8 @@ def train():
             optimizer.step()
             local_count += image.data.shape[0]
             global_step += 1
+
+            # 지정된 주기마다 로그를 출력하고, 텐서보드에 정보를 기록합니다.
             if global_step % args.print_freq == 0 or global_step == 1:
 
                 time_inter = time.time() - end_time
@@ -145,7 +177,8 @@ def train():
                 writer.add_scalar('CrossEntropyLoss', loss.data, global_step=global_step)
                 writer.add_scalar('Learning rate', scheduler.get_lr()[0], global_step=global_step)
                 last_count = local_count
-
+                
+    # 학습 완료 후, 최종 체크포인트를 저장합니다.
     save_ckpt(args.ckpt_dir, model, optimizer, global_step, args.epochs,
               0, num_train)
 
