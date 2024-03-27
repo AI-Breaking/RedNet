@@ -59,6 +59,7 @@ args = parser.parse_args()
 device = torch.device("cuda:0" if args.cuda and torch.cuda.is_available() else "cpu")
 image_w = 640
 image_h = 480
+os.environ["CUDA_VISIBLE_DEVICES"]= "1,2"
 def train():
     train_data = RedNet_data.SUNRGBD(transform=transforms.Compose([RedNet_data.scaleNorm(),
                                                                    RedNet_data.RandomScale((1.0, 1.4)),
